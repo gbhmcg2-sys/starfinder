@@ -1,6 +1,6 @@
 /* 오프라인 실행용 서비스 워커
    수정본을 올릴 때마다 VERSION 값을 바꿔 주세요. 새 버전은 앱을 두 번째 열 때부터 보여요. */
-const VERSION = 'starfinder-v1';
+const VERSION = 'starfinder-v3';
 const FILES = [
   './', './index.html', './three.min.js', './manifest.webmanifest', './privacy.html',
   './fonts/Jua.woff2', './fonts/GowunDodum.woff2',

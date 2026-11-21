@@ -81,10 +81,13 @@ button:focus-visible,.chip:focus-visible{outline:2px solid var(--gold);outline-o
 .chip.on{background:#3b3212;border-color:var(--gold);color:var(--gold);}
 .chip.go{background:#13324a;border-color:#3d7fb0;}
 #menuBtn{display:none;}
+#bar .brk{display:none;}
 @media (max-width:520px){
   #bar{flex-wrap:wrap;row-gap:2px;}
-  #bar h1{font-size:18px;flex:1;}
-  #clock{order:5;flex-basis:100%;}
+  #bar h1{font-size:18px;white-space:nowrap;}
+  #clock{flex:1 1 0;}
+  #bar .brk{display:block;flex-basis:100%;height:0;}
+  #bar .icon-btn{order:3;}
   .icon-btn{padding:6px 8px;font-size:12px;}
   .icon-btn.main{font-size:14px;}
 }
@@ -173,6 +176,8 @@ button:focus-visible,.chip:focus-visible{outline:2px solid var(--gold);outline-o
       <button class="icon-btn" id="menuBtn">메뉴</button>
       <h1>별자리 찾기</h1>
       <span id="clock"></span>
+      <span class="brk"></span>
+      <button class="icon-btn main" id="myBtn">내 위치</button>
       <button class="icon-btn main" id="photoBtn">사진으로 찾기</button>
       <button class="icon-btn" id="soundBtn">소리 켬</button>
       <button class="icon-btn" id="fsBtn">전체화면</button>
@@ -217,6 +222,15 @@ button:focus-visible,.chip:focus-visible{outline:2px solid var(--gold);outline-o
       <p class="sub">미션을 누르면 힌트가 나와요. 도장은 이 기기에만 저장돼요.</p>
       <div class="missions" id="missionList"></div>
       <button class="close-wide" id="missionClose">닫기</button>
+    </div>
+  </div>
+  <div class="sheet" id="dirSheet" hidden>
+    <div class="card">
+      <h2>휴대폰이 어느 쪽을 보고 있나요?</h2>
+      <p class="sub" id="dirWhy"></p>
+      <div class="row wrap" id="dirChoices" style="flex-wrap:wrap"></div>
+      <p class="sub" style="margin-top:12px">모르겠으면 휴대폰의 나침반 앱으로 확인해 보세요. 해가 지는 쪽이 서쪽이에요.</p>
+      <button class="close-wide" id="dirClose">닫기</button>
     </div>
   </div>
   <div id="toast"></div>
@@ -767,16 +781,26 @@ function tonight() {
   setDate(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), CONFIG.eveningHour - state.place.tz, 0)));
   state.season = null; markChips();
 }
+/* 내 위치 가져오기 — 결과: { ok:true } 또는 { ok:false, why:'이유' } */
+function getLocation() {
+  return new Promise(res => {
+    if (!navigator.geolocation) return res({ ok: false, why: '이 기기는 위치 기능이 없어요' });
+    try {
+      navigator.geolocation.getCurrentPosition(p => {
+        state.place = { name: '내 위치', lat: p.coords.latitude, lon: p.coords.longitude, tz: -new Date().getTimezoneOffset() / 60 };
+        res({ ok: true });
+      }, err => res({ ok: false, why: err.code === 1 ? '위치 권한이 꺼져 있어요(설정 → 앱/사이트 권한 → 위치 허용)' : err.code === 2 ? '위치를 찾지 못했어요(휴대폰 위치(GPS)가 꺼져 있는지 확인)' : '위치를 찾는 데 시간이 너무 걸렸어요' }),
+      { timeout: 15000, maximumAge: 600000, enableHighAccuracy: false });
+    } catch (e) { res({ ok: false, why: '위치를 쓸 수 없어요' }); }
+  });
+}
 function goNow() {
   stopPlay(); setDate(new Date()); state.season = 'now'; markChips(); SFX.whoosh();
   say(`지금 이 시각 ${state.place.name} 하늘이에요. 낮이라도 이 앱에선 별을 보여 줘요.`);
-  if (!navigator.geolocation) return;
-  try {
-    navigator.geolocation.getCurrentPosition(p => {
-      state.place = { name: '내 위치', lat: p.coords.latitude, lon: p.coords.longitude, tz: -new Date().getTimezoneOffset() / 60 };
-      setDate(new Date()); say('내 위치의 지금 하늘이에요. 위치는 이 기기 안에서만 써요.');
-    }, () => say(`위치를 쓸 수 없어서 ${CONFIG.place.name} 기준으로 보여 줘요.`), { timeout: 8000, maximumAge: 600000 });
-  } catch (e) {}
+  getLocation().then(r => {
+    if (r.ok) { setDate(new Date()); say('내 위치의 지금 하늘이에요. 위치는 이 기기 안에서만 써요.'); }
+    else say(`${r.why}. ${CONFIG.place.name} 기준으로 보여 줘요.`);
+  });
 }
 
 /* =========================================================
@@ -1309,15 +1333,95 @@ function orientToSky(e) { // 방향 센서 값 → 뒤쪽 카메라가 보는 �
   let a = e.alpha; const b = e.beta, gm = e.gamma;
   if (e.webkitCompassHeading != null) a = 360 - e.webkitCompassHeading;
   if (a == null || b == null || gm == null) return null;
-  if (e.type === 'deviceorientation' && e.absolute === false && e.webkitCompassHeading == null && AR.gotAbsolute) return null;
+  // 나침반 기준이 없는 값(상대 방향)은 동서남북을 알 수 없으니 쓰지 않음
+  if (e.type === 'deviceorientation' && e.absolute !== true && e.webkitCompassHeading == null) return null;
   if (e.type === 'deviceorientationabsolute') AR.gotAbsolute = true;
   const ca = Math.cos(a * DEG), sa = Math.sin(a * DEG), cb = Math.cos(b * DEG), sb = Math.sin(b * DEG), cg = Math.cos(gm * DEG), sg = Math.sin(gm * DEG);
   const x = -(ca * sg + sa * sb * cg), y = -(sa * sg - ca * sb * cg), z = -(cb * cg);
   return { az: wrap360(Math.atan2(x, y) / DEG), alt: Math.asin(clamp(z, -1, 1)) / DEG };
 }
 const AR = { on: false, got: false, gotAbsolute: false, stream: null, smooth: null };
-function onArOrient(e) {
-  const o = orientToSky(e); if (!o) return; AR.got = true;
+/* 다른 방식의 방향 센서(안드로이드 크롬) — 회전값(쿼터니언)으로 뒤쪽 카메라 방향 계산 */
+function quatToSky(q) {
+  if (!q) return null; const [x, y, z, w] = q;
+  // (0,0,-1)을 회전
+  const vx = -(2 * (x * z + w * y)), vy = -(2 * (y * z - w * x)), vz = -(1 - 2 * (x * x + y * y));
+  return { az: wrap360(Math.atan2(vx, vy) / DEG), alt: Math.asin(clamp(vz, -1, 1)) / DEG };
+}
+/* 방향 센서 켜기 — cb(방향)를 계속 불러 줌. 끄는 함수를 돌려줌 */
+async function startOrientation(cb) {
+  try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); } catch (e) {}
+  let got = false, sensor = null;
+  const h = e => { const o = orientToSky(e); if (o) { got = true; cb(o); } };
+  window.addEventListener('deviceorientationabsolute', h); window.addEventListener('deviceorientation', h);
+  const t = setTimeout(() => {
+    if (got || !('AbsoluteOrientationSensor' in window)) return;
+    try {
+      sensor = new AbsoluteOrientationSensor({ frequency: 30 });
+      sensor.addEventListener('reading', () => { const o = quatToSky(sensor.quaternion); if (o) { got = true; cb(o); } });
+      sensor.addEventListener('error', () => {}); sensor.start();
+    } catch (e) {}
+  }, 600);
+  return () => { window.removeEventListener('deviceorientationabsolute', h); window.removeEventListener('deviceorientation', h); clearTimeout(t); if (sensor) try { sensor.stop(); } catch (e) {} };
+}
+/* 지금 보이는 쪽의 별자리 이름(유명한 것 먼저) */
+function namesToward(az, alt, fov = 70) {
+  const dir = horizonVec(az, alt), list = [];
+  CONS.forEach(c => {
+    const w = consCenter(c).clone().applyMatrix4(SKY_M), h = toHorizon(w); if (h.alt < 3) return;
+    const ang = Math.acos(clamp(w.dot(dir), -1, 1)) / DEG;
+    if (ang < fov * 0.5) list.push({ c, rank: FAMOUS.indexOf(c.id) < 0 ? 99 : FAMOUS.indexOf(c.id), ang });
+  });
+  list.sort((a, b) => a.rank - b.rank || a.ang - b.ang);
+  return list.slice(0, 3).map(x => x.c.ko);
+}
+function showToward(az, alt, how) {
+  alt = clamp(alt, 12, 70); lookAt(az, alt, 72);
+  const n = namesToward(az, alt);
+  const where = `${octName(az)}쪽`;
+  say(`${how} ${where} 하늘이에요. ` + (n.length ? `${n.join(', ')}${n.length > 1 ? ' 등이' : '가'} 보여요. 선을 톡 눌러 보세요.` : '이쪽엔 밝은 별자리가 적어요. 다른 쪽도 둘러보세요.'));
+}
+/* '내 위치' 버튼: 지금 시각 + 내 위치 + 휴대폰이 향한 방향의 하늘 */
+let myBusy = false;
+async function findMySky() {
+  if (myBusy) return; myBusy = true; audioReady(); SFX.whoosh();
+  if (AR.on) stopAR(); stopPlay(); clearSelect();
+  setDate(new Date()); state.season = 'now'; markChips();
+  say('내 위치와 휴대폰 방향을 읽고 있어요… 휴대폰을 보고 싶은 하늘 쪽으로 들어 주세요.');
+  const locP = getLocation();
+  // 방향: 1초 동안 모아서 평균
+  const samples = []; const stop = await startOrientation(o => samples.push(o));
+  const dir = await new Promise(res => {
+    const t0 = performance.now();
+    const tick = () => {
+      if (samples.length >= 8 && performance.now() - t0 > 900) return res(samples);
+      if (performance.now() - t0 > 2600) return res(samples.length ? samples : null);
+      setTimeout(tick, 100);
+    }; tick();
+  });
+  stop();
+  const loc = await Promise.race([locP, new Promise(r => setTimeout(() => r({ ok: false, why: '위치를 찾는 중이에요', pending: true }), 1500))]);
+  if (loc.ok) setDate(new Date());
+  const placeTxt = loc.ok ? '내 위치' : CONFIG.place.name + ' 기준';
+  if (dir) {
+    let sx = 0, sy = 0, a = 0; dir.forEach(o => { sx += Math.sin(o.az * DEG); sy += Math.cos(o.az * DEG); a += o.alt; });
+    const az = wrap360(Math.atan2(sx, sy) / DEG), alt = a / dir.length;
+    showToward(az, alt, `휴대폰이 ${octName(az)}쪽(${Math.round(az)}°)을 보고 있어요. 지금 ${placeTxt}의`);
+    SFX.select();
+  } else {
+    $('dirWhy').textContent = '이 휴대폰에서 방향 센서 값을 읽지 못했어요. 방향을 골라 주시면 그쪽 하늘을 보여 드릴게요.' + (loc.ok ? '' : ` (위치: ${loc.why})`);
+    $('dirSheet').hidden = false;
+  }
+  if (!loc.ok && loc.pending) locP.then(r => { if (r.ok) { setDate(new Date()); say('내 위치를 찾았어요. 지금 내 위치의 하늘로 바꿨어요.'); } else say(`${r.why}. ${CONFIG.place.name} 기준으로 보여 줘요.`); });
+  else if (!loc.ok && dir) setTimeout(() => say(`${loc.why}. ${CONFIG.place.name} 기준으로 보여 줘요.`), 2500);
+  myBusy = false;
+}
+$('myBtn').onclick = findMySky;
+PHOTO_DIRS.filter(d => d.az != null).forEach(d => chip($('dirChoices'), d.name, () => { $('dirSheet').hidden = true; SFX.tap(); showToward(d.az, 35, `지금 ${state.place.name === '내 위치' ? '내 위치' : CONFIG.place.name + ' 기준'}의`); }));
+$('dirClose').onclick = () => { $('dirSheet').hidden = true; };
+$('dirSheet').addEventListener('click', e => { if (e.target.id === 'dirSheet') $('dirSheet').hidden = true; });
+function onArOrient(o) {
+  if (!AR.on || !o) return; AR.got = true;
   // 손떨림을 줄이려고 부드럽게 따라감
   if (!AR.smooth) AR.smooth = { ...o };
   AR.smooth.az = wrap360(AR.smooth.az + angDiff(AR.smooth.az, o.az) * 0.25); AR.smooth.alt += (o.alt - AR.smooth.alt) * 0.25;
@@ -1325,10 +1429,8 @@ function onArOrient(e) {
 }
 async function startAR() {
   audioReady(); SFX.whoosh();
-  // 아이폰은 허락을 먼저 받아야 함(다른 기기는 바로 진행)
-  try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); } catch (e) {}
   AR.on = true; AR.got = false; AR.smooth = null; arChip.classList.add('on'); arChip.textContent = '비춰 보기 끄기';
-  window.addEventListener('deviceorientationabsolute', onArOrient); window.addEventListener('deviceorientation', onArOrient);
+  AR.stopSensor = await startOrientation(o => onArOrient(o));
   goNow(); stopPlay();
   say('휴대폰을 하늘로 들어 보세요. 휴대폰이 향한 쪽의 별자리가 보여요.');
   // 뒤쪽 카메라 화면을 바탕에 깔기(안 되면 별자리 하늘만)
@@ -1342,13 +1444,13 @@ async function startAR() {
     }
   } catch (e) { /* 카메라 없이 진행 */ }
   setTimeout(() => {
-    if (AR.on && !AR.got) { stopAR(); say('방향 센서를 쓸 수 없어요. 휴대폰에서 열었는지, 방향 센서 사용을 허락했는지 확인해 주세요. 이 미리보기 화면에서는 막혀 있을 수 있어요.'); }
-  }, 1800);
+    if (AR.on && !AR.got) { stopAR(); $('dirWhy').textContent = '이 휴대폰에서 방향 센서 값을 읽지 못했어요. 방향을 골라 주시면 그쪽 하늘을 보여 드릴게요.'; $('dirSheet').hidden = false; say('방향 센서 값을 읽지 못했어요. ‘내 위치’ 버튼을 누르면 방향을 직접 골라 하늘을 볼 수 있어요.'); }
+  }, 2600);
   stamp('aim');
 }
 function stopStream() { if (AR.stream) { AR.stream.getTracks().forEach(t => t.stop()); AR.stream = null; } const v = $('camvid'); v.hidden = true; v.srcObject = null; }
 function stopAR() {
-  AR.on = false; window.removeEventListener('deviceorientationabsolute', onArOrient); window.removeEventListener('deviceorientation', onArOrient);
+  AR.on = false; if (AR.stopSensor) { AR.stopSensor(); AR.stopSensor = null; }
   stopStream(); renderer.setClearColor(0x070d1f, 1); groundParts.forEach(g => g.visible = true);
   arChip.classList.remove('on'); arChip.textContent = '하늘에 비춰 보기';
 }
@@ -1368,6 +1470,8 @@ tonight();
   say(f ? `오늘 밤 9시 ${state.place.name} 하늘이에요. ${octName(f.h.az)}쪽에 ${CONS_BY_ID[f.id].ko}가 보여요. 빈 곳을 끌어 둘러보고, 별자리 선을 톡 눌러 보세요.`
         : '오늘 밤 하늘이에요. 빈 곳을 끌어 둘러보고, 별자리 선을 톡 눌러 보세요.');
   requestAnimationFrame(loop);
+  // 예전에 위치를 허락했다면 묻지 않고 내 위치로 바꿈
+  try { navigator.permissions && navigator.permissions.query({ name: 'geolocation' }).then(r => { if (r.state === 'granted') getLocation().then(x => { if (x.ok) { tonight(); say('내 위치의 오늘 밤 9시 하늘이에요. ‘내 위치’를 누르면 휴대폰이 향한 쪽 하늘을 보여 줘요.'); } }); }).catch(() => {}); } catch (e) {}
 })();
 </script>
 <script>
@@ -1377,7 +1481,18 @@ tonight();
 (function () {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
-  if (standalone) { $('fsBtn').hidden = true; return; }   // 이미 설치된 앱으로 열었으면 버튼 숨김
+  if (standalone) {
+    // 설치된 앱: 화면을 누르면 진짜 전체화면으로 바꿔서, 가로 화면의 카메라 구멍(노치) 쪽 빈 띠까지 밤하늘로 채운다
+    $('fsBtn').hidden = true;
+    const goFull = () => {
+      const d = document, el = d.documentElement;
+      if (d.fullscreenElement || d.webkitFullscreenElement) return;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen; if (!req) return;
+      try { const r = req.call(el, { navigationUI: 'hide' }); if (r && r.catch) r.catch(() => {}); } catch (e) {}
+    };
+    window.addEventListener('pointerup', goFull, { capture: true });
+    return;
+  }
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   let deferred = null;
   const steps = isIOS
